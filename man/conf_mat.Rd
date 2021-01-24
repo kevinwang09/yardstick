@@ -114,9 +114,19 @@ round(mean_cmat, 3)
 
 # The confusion matrix can quickly be visualized using autoplot()
 library(ggplot2)
+library(patchwork)
 
 autoplot(cm, type = "mosaic")
 autoplot(cm, type = "heatmap")
+
+# A binary example
+cm <- hpc_cv \%>\%
+  filter(Resample == "Fold01", obs \%in\% c("VF", "F"), pred \%in\% c("VF", "F")) \%>\%
+  mutate(obs = obs \%>\% droplevels,
+         pred = pred \%>\% droplevels) \%>\%
+  conf_mat(obs, pred)
+autoplot(cm, "heatmap2")
+
 
 }
 \seealso{

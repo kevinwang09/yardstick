@@ -85,9 +85,19 @@
 #'
 #' # The confusion matrix can quickly be visualized using autoplot()
 #' library(ggplot2)
+#' library(patchwork)
 #'
 #' autoplot(cm, type = "mosaic")
 #' autoplot(cm, type = "heatmap")
+#'
+#' # A binary example
+#' cm <- hpc_cv %>%
+#'   filter(Resample == "Fold01", obs %in% c("VF", "F"), pred %in% c("VF", "F")) %>%
+#'   mutate(obs = obs %>% droplevels,
+#'          pred = pred %>% droplevels) %>%
+#'   conf_mat(obs, pred)
+#' autoplot(cm, "heatmap2")
+#'
 #'
 #' @export
 conf_mat <- function(data, ...) {
@@ -297,12 +307,13 @@ autoplot.conf_mat <- function(object, type = "mosaic", ...) {
   type <- rlang::arg_match(type, conf_mat_plot_types)
 
   switch(type,
-    mosaic = cm_mosaic(object),
-    heatmap = cm_heat(object)
+         mosaic = cm_mosaic(object),
+         heatmap = cm_heat(object),
+         heatmap2 = cm_heat2(object),
   )
 }
 
-conf_mat_plot_types <- c("mosaic", "heatmap")
+conf_mat_plot_types <- c("mosaic", "heatmap", "heatmap2")
 
 cm_heat <- function(x) {
   `%+%` <- ggplot2::`%+%`
@@ -401,4 +412,113 @@ cm_mosaic <- function(x) {
       x = "Truth"
     ) %+%
     ggplot2::theme(panel.background = ggplot2::element_blank())
+}
+
+cm_heat2 <- function(x) {
+  `%+%` <- ggplot2::`%+%`
+  table <- x$table
+
+  df <- as.data.frame.table(table)
+
+  # Force known column names, assuming that predictions are on the
+  # left hand side of the table (#157).
+  names(df) <- c("Prediction", "Truth", "Freq")
+
+  # Have prediction levels going from high to low so they plot in an
+  # order that matches the LHS of the confusion matrix
+  df$percent = 100*signif(df$Freq/sum(df$Freq), 3)
+  df$label = paste0(df$Freq, "\n (", df$percent, "%)")
+  df$colour = ifelse(df$Truth == df$Prediction, 1, -1)*df$percent
+  first_level = levels(df$Prediction)[1]
+  second_level = levels(df$Prediction)[2]
+  df$Prediction <- factor(df$Prediction, levels = c(second_level, first_level))
+
+  p_main = small_heatmap_plot(df)
+
+  summary_cm = summary(x)
+
+  extra_cols = c(
+    PPV = summary_cm[summary_cm$.metric == "ppv",]$.estimate,
+    NPV = summary_cm[summary_cm$.metric == "npv",]$.estimate)
+  extra_cols["FDR"]  = 1 - extra_cols["PPV"]
+  extra_cols["FOR"]  = 1 - extra_cols["NPV"]
+  extra_cols = extra_cols[c("PPV", "FDR", "FOR", "NPV")]
+
+  extra_cols_df = data.frame(
+    .metric = names(extra_cols),
+    percent = 100*signif(extra_cols, 3),
+    Prediction = factor(c(first_level, first_level, second_level, second_level),
+                        levels = c(second_level, first_level)),
+    Truth = factor(c(first_level, second_level, first_level, second_level),
+                   levels = c(first_level, second_level)),
+    stringsAsFactors = FALSE)
+  extra_cols_df$label = paste0(extra_cols_df$.metric, ": \n", extra_cols_df$percent, "%")
+  extra_cols_df$colour = c(1, -1, -1, 1) * extra_cols_df$percent
+
+  p_cols = small_heatmap_plot(extra_cols_df) %+%
+    theme(axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank())
+
+  extra_rows = c(
+    TPR = summary_cm[summary_cm$.metric == "sens",]$.estimate,
+    TNR = summary_cm[summary_cm$.metric == "spec",]$.estimate)
+  extra_rows["FPR"]  = 1 - extra_rows["TNR"]
+  extra_rows["FNR"]  = 1 - extra_rows["TPR"]
+  extra_rows = extra_rows[c("TPR", "FPR", "FNR", "TNR")]
+
+  extra_rows_df = data.frame(
+    .metric = names(extra_rows),
+    percent = 100*signif(extra_rows, 3),
+    Prediction = factor(c(first_level, first_level, second_level, second_level),
+                        levels = c(second_level, first_level)),
+    Truth = factor(c(first_level, second_level, first_level, second_level),
+                   levels = c(first_level, second_level)),
+    stringsAsFactors = FALSE)
+  extra_rows_df$label = paste0(extra_rows_df$.metric, ": \n", extra_rows_df$percent, "%")
+  extra_rows_df$colour = c(1, -1, -1, 1) * extra_rows_df$percent
+
+  p_rows = small_heatmap_plot(extra_rows_df) %+%
+    theme(axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank())
+
+  total_summary = c(
+    F1 = summary_cm[summary_cm$.metric == "f_meas",]$.estimate,
+    accuracy = summary_cm[summary_cm$.metric == "accuracy",]$.estimate,
+    "balanced \n accuracy" = summary_cm[summary_cm$.metric == "bal_accuracy",]$.estimate,
+    mcc = summary_cm[summary_cm$.metric == "mcc",]$.estimate)
+  total_summary = total_summary[c("accuracy", "balanced \n accuracy", "F1", "mcc")]
+
+  total_summary_df = data.frame(
+    .metric = names(total_summary),
+    percent = 100*signif(total_summary, 3),
+    Prediction = factor(c(second_level, second_level, first_level, first_level),
+                        levels = c(second_level, first_level)),
+    Truth = factor(c(first_level, second_level, second_level, first_level),
+                   levels = c(first_level, second_level)),
+    stringsAsFactors = FALSE)
+  total_summary_df$label = paste0(total_summary_df$.metric, ": \n", total_summary_df$percent, "%")
+  total_summary_df$colour = c(1, 1, 1, 1) * total_summary_df$percent
+
+  p_total = small_heatmap_plot(total_summary_df) %+%
+    theme(axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          axis.text = element_blank())
+
+  return(p_main + p_cols + p_rows + p_total)
+}
+
+small_heatmap_plot = function(plotdf){
+  ggplot2::ggplot(data = plotdf,
+                  ggplot2::aes(
+                    x = Truth,
+                    y = Prediction,
+                    fill = colour)) %+%
+    ggplot2::geom_tile(colour = "gray40") %+%
+    ggplot2::scale_fill_gradient2(low = "darkgoldenrod", high = "dodgerblue2",
+                                  limits = c(-100, 100), guide = FALSE) %+%
+    ggplot2::theme(
+      panel.background = ggplot2::element_blank()) %+%
+    ggplot2::geom_text(ggplot2::aes(label = label))
 }
